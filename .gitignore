@@ -24,3 +24,4 @@ NLSY_83121.rds
 *.csv
 
 personality_measures.rdata
+.Rproj.user
