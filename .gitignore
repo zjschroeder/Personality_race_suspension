@@ -1,0 +1,26 @@
+
+data/
+
+analysis_files/
+
+analysis_cache/
+
+old analyses/
+
+datasets.xlsx
+
+data.RDS
+
+data.rdata
+
+*.rda
+
+Revised-Analyses_cache/html/
+
+Revised-Analyses_files/figure-html/
+
+NLSY_83121.rds
+
+*.csv
+
+personality_measures.rdata

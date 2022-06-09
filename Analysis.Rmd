@@ -1,0 +1,771 @@
+---
+title: "Final Analyses"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+```
+
+# Data Import
+
+### Libraries
+
+```{r Packages, results='hide', message=FALSE}
+library(tidyverse)
+library(lme4)
+library(nlme)
+library(psych)
+library(finalfit)
+library(naniar)
+library(recipes)
+library(stringr)
+library(reshape2)
+library(sjPlot)
+library(emmeans)
+library(purrr)
+library(plotly)
+library(jtools)
+library(knitr)
+library(kableExtra)
+library(survey)
+
+here::here()
+```
+
+```{r Plotting Themes}
+set_theme(base = theme_minimal())
+```
+
+
+### Load Data
+
+```{r Load Data}
+load("data.rdata")
+load("personality_measures.rData")
+```
+
+### Column Names
+
+```{r fix colnames, echo = FALSE}
+nlsy <- rename(nlsy,
+       extrav = extra_tipi,
+       agree = agree_tipi,
+       consc = consc_tipi,
+       open= open_tipi,
+       neuro = neuro_tipi,
+       race = race1
+)
+nlsy_l <- rename(nlsy_l,
+       extrav = extra_tipi,
+       agree = agree_tipi,
+       consc = consc_tipi,
+       open= open_tipi,
+       neuro = neuro_tipi,
+       race = race1
+)
+nlsy <- nlsy %>% 
+  select(pid:neuro_mi, race)
+
+nlsy <- nlsy %>% 
+  mutate(sex = tolower(sex) %>% 
+           factor(),
+         race1 = race,
+         race = forcats::fct_collapse(race_full,
+                                        other = c("", "aapi", 
+                                                  "indig", "other")))
+
+nlsy_l <- nlsy_l %>% 
+  select(pid:neuro_mi, race:school_group)
+
+add <- add %>% 
+  mutate(ever_suspended = str_to_title(ever_suspended) %>% 
+           factor(),
+    pid = as.character(pid) %>% 
+      as.numeric()
+  )
+nlsy$race <- nlsy$race %>% 
+  forcats::fct_relevel("black" , "white" , "latinx", "other")
+  
+```
+
+### Sampling Weights
+
+```{r Sampling Weights}
+#################### SAMPLE WEIGHTS  
+###### NLSY
+nlsy_w <- rio::import(here::here("data/nlsy_weights/customweight_nlscya_6260ed2f1804a9e8208.dat")) %>% 
+  as_tibble()
+names(nlsy_w) <- c("pid", "weight")
+nlsy <- left_join(nlsy, nlsy_w, by = "pid") %>% 
+  mutate(
+    pid = factor(pid)
+  )
+
+###### NLSY LONG
+nlsy_l <- full_join(nlsy_l, nlsy_w, by = "pid") %>% 
+  mutate(
+    pid = factor(pid)
+  )
+
+
+#str(nl)
+###### ADD
+add_w <- rio::import(here::here("data/add_weights.sav"))
+names(add_w) <- c("pid", "cluster", "weight_long", "weight", "weight_long_w134")
+add_w <- add_w %>% 
+  mutate(
+    pid = as.character(pid) %>% 
+      as.numeric()
+  )
+add <- left_join(add, add_w, by = "pid") %>% 
+  mutate(
+    pid = factor(pid)
+  )
+```
+
+### Final Variable Counts: 
+
+NLSY: 18
+ADD Health: 23
+
+```{r manipulating Data into lists}
+#str(add)
+data <- list(nlsy, add)
+
+# CREATING MAP-ABLE LIST OF DATA
+
+n <- nlsy %>% melt(
+  id.vars = c("pid", "sex", "birth_year", "race", "race_full", "race1", "age_tipi", "ever_suspended", "weight"),
+  variable.name = "measure", 
+  value.name = "score") %>% 
+  split(., .$measure)
+
+a <- add %>% melt(
+  id.vars = c("pid", "sex", "birth_year", "race", "hispanic", "home_language", 
+              "US_born", "grade_w1", "suspension_this_year", "ever_suspended",
+              "grade_last_suspended", "pid", "cluster", "weight_long", "weight", "weight_long_w134"),
+  variable.name = "measure", 
+  value.name = "score") %>% 
+  split(., .$measure)
+
+
+
+d <- c(a, n)
+names_list <- names(d)
+names_data <- c(rep("_add", length(a)), rep("_nlsy", length(n)))
+names(d) <- paste0(names_list, names_data)
+```
+
+### lists for Sampling Weights Adjusted
+
+```{r}
+require(survey)
+nlsy_adj <- svydesign(id     = ~pid,
+                     weights = ~weight,
+                     data    = nlsy)
+
+nlsy_l_adj <- svydesign(id   = ~pid,
+                     weights = ~weight,
+                     data    = nlsy_l)
+
+add_adj <- svydesign(id      = ~pid,
+                     strata  = ~cluster,
+                     weights = ~weight,
+                     data    = add)
+data_adj <- list(nlsy_adj, add_adj)
+names(data_adj) <- c("nlsy_adj", "add_adj")
+```
+
+```{r manipulating weighted data into lists}
+# CREATING MAP-ABLE LIST OF DATA
+a_adj <- map(a, ~svydesign(id     = ~pid,
+                           weights = ~weight,
+                           strata  = ~cluster,
+                           data    = .x))
+
+n_adj <- map(n, ~svydesign(id     = ~pid,
+                           weights = ~weight,
+                           data    = .x))
+
+d_adj <- c(a_adj, n_adj)
+names_list <- names(d_adj)
+names_data_adj <- c(rep("_add_adj", length(a_adj)), rep("_nlsy_adj", length(n_adj)))
+names(d_adj) <- paste0(names_list, names_data)
+```
+
+# Descriptive Statistics
+
+## Demographics (Sampling)
+
+```{r Participant Demographics Table}
+############### Pretty Table Function
+pretty_table <- function(df){
+  x <- deparse(substitute(df))
+  df %>% 
+  kbl(caption = x) %>%
+  kable_classic(full_width = F, html_font = "Cambria")
+}
+
+############### FUNCTION
+pdem <- function(df){
+  df %>% 
+  group_by(race, sex) %>% 
+  count(.) %>% 
+  pretty_table(.)
+}
+
+################ ANALYSIS
+pdem(nlsy)
+pdem(add)
+```
+
+```{r Participant Demographics Figure}
+############### FUNCTION
+pdem_plot <- function(df){
+  df %>% 
+  ggplot() +
+  geom_bar(aes(str_to_title(race), fill = str_to_title(sex)),
+           position = "dodge") +
+  theme_apa() +
+  theme(legend.position = "bottom") +
+  labs(
+    x = "Race",
+    y = "N"
+  )
+}
+################ ANALYSIS
+pdem_plot(nlsy)
+pdem_plot(add)
+```
+
+## Proportion Suspended (Unweighted)
+
+```{r}
+################ FUNCTION
+susp_prop <- function(df){
+  proportion <- df %>% 
+  group_by(sex, race, ever_suspended) %>% 
+  count() %>% 
+  na.omit()
+proportion <- spread(proportion, key = ever_suspended, value = n) %>% 
+  tibble(.)
+proportion$total <- proportion$No + proportion$Yes
+proportion$prop <- round(proportion$Yes/proportion$total, 2)
+colnames(proportion) <- c("Sex", "Race", "Not Suspended", "Suspended", 
+                          "Total n", "Proportion")
+return(proportion)
+}
+
+
+# PROPORTION PLOT
+
+plot_prop <- function(df){
+  df %>% 
+    mutate(Demographic = paste(str_to_title(df$Race), str_to_title(df$Sex), sep = "\n"),
+           Percent = Proportion * 100) %>% 
+  ggplot() +
+    geom_col(aes(Demographic, Percent, fill = Race),
+             position = "dodge") +
+  labs(title = "Proportion of Students Suspended",
+       caption = deparse(substitute(df)),
+       subtitle = "By Race and Gender",
+       x = "Race",
+       y = "Percent of students") +
+    ylim(0, 75) +
+  theme_apa() +
+  theme(legend.position = "none")
+}
+
+
+###### NLSY
+nlsy_prop <- susp_prop(nlsy)
+pretty_table(nlsy_prop)
+plot_prop(nlsy_prop)
+
+
+####### ADD HEALTH
+add_prop <- susp_prop(add)
+pretty_table(add_prop)
+plot_prop(add_prop)
+```
+
+## (W) Proportion Suspended 
+
+```{r}
+require(survey)
+########### Creating Data Table
+adj_samples <- map(data_adj, ~svytotal(
+  ~interaction(.x$variables$sex, .x$variables$race, .x$variables$ever_suspended),
+  .x
+))
+
+########### 
+## NLSY HEALTH
+nlsy_pt <- tibble(
+total_no = c(51745256, 56610495, 143520099, 104834469, 17886824, 19258129, 580087226, 549189747), 
+total_yes = c(5180151, 17243098, 50680215, 86714845, 2654794, 5961711, 35086329, 94804143),
+SE_no = c(3423172, 3872039, 4689369, 4114781, 1698220, 1718261, 13940592, 13800227),
+SE_yes = c(1150771, 2049397, 3026543, 3941767, 58024, 1091982, 3574711, 5876934),
+race = c(  "other",  "other", 
+           "black",  "black",
+           "latinx", "latinx", 
+           "white",  "white") %>% 
+  factor(),
+
+sex = c("female", "male", "female", "male", 
+        "female", "male", "female", "male") %>% 
+  factor()
+)
+nlsy_pt <- nlsy_pt %>% 
+  mutate(
+    Percent =total_yes/(total_yes + total_no))
+  
+
+########### 
+## ADD HEALTH
+
+add_pt <- tibble(
+total_no = c(720038, 1076668, 5324124, 6522058, 731884, 972598, 263620, 332552),
+total_yes = c(1000375, 681941, 2417160, 975055, 476266, 246398, 113382, 49626), 
+SE_no = c(54634, 57848, 156621, 151210, 60623, 68309, 32481, 38782),
+SE_yes = c(68223, 50460, 117643, 70422, 50586, 33480, 29711, 14093),
+race = c("black", "black", 
+         "white", "white", 
+         "latinx", "latinx", 
+         "other", "other") %>% 
+  factor(),
+
+sex = c("male", "female", "male", "female",  
+        "male", "female", "male", "female") %>% 
+  factor()
+)
+add_pt <- add_pt %>% 
+  mutate(
+    Percent = total_yes/(total_yes + total_no))
+
+######## LIST
+adj_prop <- list(nlsy_pt, add_pt)
+names(adj_prop) <- c("NLSY_adj", "ADD_adj")
+
+########## Output
+map(adj_prop, pretty_table)
+########## Adj Plot Function
+adj_plot_f <- function(x)
+  {x %>% 
+    ggplot() +
+    geom_col(aes(race, Percent, fill = sex),
+             position = "dodge") +
+  labs(title = "Proportion of Students Suspended",
+       caption = deparse(substitute(x)),
+       subtitle = "By Race and Gender",
+       x = "Race",
+       y = "Percent of students") +
+    ylim(0, 1) +
+  theme_apa() +
+  theme(legend.position = "none")
+}
+
+map(adj_prop, adj_plot_f)
+```
+
+
+# Inferential Statistics
+
+## Race x Gender inxn Effects Of Being Suspended 
+
+```{r Race x Gender Interaction Function, results='asis'}
+race_by_gender_interaction <- function(df){
+  name <- deparse(substitute(df))
+  rsm <- glm(ever_suspended ~ race * sex,
+             family = binomial, data = df)
+  sum <- summary(rsm)
+  plot <- plot_model(rsm, type = "pred", terms = c("race", "sex"))
+  emm <- emmeans(rsm, specs = pairwise ~ race | sex,
+                 type = "response", adjust = "none")
+  assign(
+    x = paste0(name, "_rxg"),
+    value = list(rsm, sum, plot, emm),
+    envir = .GlobalEnv
+  )
+}
+
+race_by_gender_interaction(nlsy)
+race_by_gender_interaction(add)
+```
+
+> This is a reproduction of prior analytic work that shows yes, there are *large racial differences in suspension rate*.I believe the ADD-Health data are, however, a novel "replication"
+
+## (W) Race x Gender inxn Effects Of Being Suspended 
+
+```{r}
+race_by_gender_interaction_adj <- function(df){
+  name <- deparse(substitute(df))
+  rsm <- svyglm(ever_suspended ~ race * sex,
+                family = quasibinomial, 
+                design = df)
+  sum <- summary(rsm)
+  plot <- plot_model(rsm, 
+                     type = "pred", 
+                     terms = c("race", "sex"))
+  emm <- emmeans(rsm, specs = pairwise ~ race | sex,
+                 type = "response", adjust = "none")
+  assign(
+    x = paste0(name, "_rxg"),
+    value = list(rsm, sum, plot, emm),
+    envir = .GlobalEnv
+  )
+}
+
+race_by_gender_interaction_adj(nlsy_adj)
+race_by_gender_interaction_adj(add_adj)
+```
+
+## Output for race x gender x suspension models
+
+```{r}
+print(nlsy_rxg)
+print(nlsy_adj_rxg)
+print(add_rxg)
+print(add_adj_rxg)
+```
+
+# Analysis: 
+
+## Big Five Moderation Analysis
+
+```{r Personality models and outputs}
+# CREADING LISTS OF OUR VARIOUS OUTPUTS
+p_mod <- map(d, ~glm(ever_suspended ~ race * sex * score,
+             family = binomial, 
+             data = .x))
+p_sum <- map(p_mod, summary)
+p_plot <- map(p_mod, ~plot_model(.x, type = "pred", 
+                                 terms = c("score", "race", "sex"),
+                                 colors = c("red1", "deepskyblue2", "gray 79", "grey 66")))
+p_emtrend_output <- map(p_mod, ~emtrends(.x, pairwise ~ race*sex, 
+                                         var = "score", 
+                                         adjust = "none"))
+##### Merging lists
+pers_models <- list(NULL)
+for(i in seq_along(p_mod)){
+  pers_models[[i]] <-  list(p_mod[[i]], p_sum[[i]], p_plot[[i]], p_emtrend_output[[i]])
+}
+# Setting sub-component names
+for(i in seq_along(pers_models)){
+  names(pers_models[[i]]) = c("Model", "Summary", "Plot", "Emtrend_Output")
+}
+# Setting names
+names(pers_models) = paste0(names_list, names_data)
+```
+
+```{r Searching for just p<.05}
+
+
+sig_values_funct(p_emtrend_output)
+
+sig_values <- list(NULL)
+for(i in seq_along(p_emtrend_output)){
+  sig_values[[i]] = summary(p_emtrend_output[[i]]$contrasts) %>% 
+    as_tibble(.) %>% 
+    filter(`p.value` < .05)}
+
+names(sig_values) = paste0(names_list, names_data)
+```
+
+## (W) Big Five Moderation Analysis
+
+```{r Personality models and outputs}
+# CREADING LISTS OF OUR VARIOUS OUTPUTS
+p_mod_adj <- map(d_adj, ~svyglm(ever_suspended ~ race * sex * score,
+             family = binomial, 
+             design = .x))
+            
+w <- plot_model(p_mod_adj$extrav_add, type = "pred", 
+                terms = c("score", "race", "sex"))
+ 
+p_sum_adj <- map(p_mod_adj, summary)
+p_plot_adj <- map(p_mod_adj, ~plot_model(.x, type = "pred", 
+                                 terms = c("score", "race", "sex"),
+                                 colors = c("red1", "deepskyblue2", "gray 66", "grey 79")))
+
+for(i in 1:18){
+  p_mod_adj[i][["naive.cov"]] <- NULL
+  p_mod_adj[i][["cov.unscaled"]] <- NULL
+  p_mod_adj[i][["survey.design"]] <- NULL
+}
+
+emtrends(p_mod_adj$extrav_add, pairwise ~ race*sex,
+         var = "score", 
+         adjust = "none",
+         weights = p_mod_adj$extrav_add$model$`(weights)`,
+         data = p_mod_adj$extrav_add$data)
+
+
+p_emtrend_output_adj <- map(p_mod_adj, ~emtrends(.x, 
+                                                 pairwise ~ race*sex,
+                                                 var = "score", 
+                                                 adjust = "none",
+                                                 weights = .x$model$`(weights)`,
+                                                 data = .x$data)
+)
+##### Merging lists
+pers_models_adj <- list(NULL)
+for(i in seq_along(p_mod_adj)){
+  pers_models_adj[[i]] <-  list(p_mod_adj[[i]], p_sum_adj[[i]], p_plot_adj[[i]], p_emtrend_output_adj[[i]])
+}
+# Setting sub-component names
+for(i in seq_along(pers_models_adj)){
+  names(pers_models_adj[[i]]) = c("Model", "Summary", "Plot", "Emtrend_Output")
+}
+`# Setting names
+names(pers_models_adj) = paste0(names_list, names_data_adj)
+
+# Setting sub-component names
+for(i in seq_along(pers_models_adj)){
+  names(pers_models_adj[[i]]) = c("Model (weighted)", "Summary (weighted)", "Plot #(weighted)", "Emtrend_Output (weighted)")
+}
+# Setting names
+names(pers_models_adj) = paste0(names_list, names_data_adj)
+```
+
+```{r Searching for just p<.05}
+sig_values_adj <- list(NULL)
+for(i in seq_along(p_emtrend_output_adj)){
+  sig_values_adj[[i]] = summary(p_emtrend_output_adj[[i]]$contrasts) %>% 
+    as_tibble(.) %>% 
+    filter(`p.value` < .05)}
+
+names(sig_values_adj) = paste0(names_list, names_data_adj)
+
+```
+
+
+# Sensitivity Analysis: Examining Variance with Loaded Models
+
+```{r Variance Loaded Modeling Function}
+var_loaded_funct <- function(model, trait){
+  plot <<- plot_model(model, 
+           type = "pred", 
+           terms = c(paste0(trait), "race", "sex"))
+  output <<- emtrends(model, 
+                    pairwise ~ race*sex, 
+                    var = paste0(trait), 
+                    adjust = "none")
+}
+```
+
+
+## NLSY TIPI Variance-Loaded Models
+
+```{r NLSY TIPI Variance Models, eval = F}
+# Model 
+nlsy_tipi_variance_model_adj <- svyglm(ever_suspended ~ 
+                                  race * sex * extrav + 
+                                  race * sex * open + 
+                                  race * sex * neuro + 
+                                  race * sex * consc + 
+                                  race * sex * agree,
+             family = binomial, design = nlsy_adj)
+
+# summary(nlsy_tipi_variance_model)
+
+nlsy_tipi_loaded_adj <- list(NULL)
+trait <- c("extrav", "agree", "neuro", "consc", "open")
+for(i in seq_along(trait)){
+  var_loaded_funct(nlsy_tipi_variance_model_adj, paste0(trait[i]))
+  nlsy_tipi_loaded_adj[[paste0(trait[i])]][[1]] <- plot
+  nlsy_tipi_loaded_adj[[paste0(trait[i])]][[2]] <- output
+}
+
+nlsy_tipi_loaded
+
+```
+
+## NLSY MINI-IPIP Variance-Loaded Models
+
+```{r NLSY MINI-IPIP Variance Models, eval = F}
+## Model 
+nlsy_mini_ipip_variance_model_adj <- svyglm(ever_suspended ~ 
+                                  race * sex * extrav_mi + 
+                                  race * sex * agree_mi + 
+                                  race * sex * neuro_mi + 
+                                  race * sex * consc_mi + 
+                                  race * sex * open_mi,
+                                  family = binomial, 
+                                  design = nlsy_adj)
+
+# summary(nlsy_mini_ipip_variance_model)
+
+nlsy_mini_ipip_loaded <- list(NULL)
+trait <- c("extrav_mi", "agree_mi", "neuro_mi", "consc_mi", "open_mi")
+for(i in seq_along(trait)){
+  var_loaded_funct(nlsy_mini_ipip_variance_model, paste0(trait[i]))
+  nlsy_mini_ipip_loaded[[paste0(trait[i])]][[1]] <- plot
+  nlsy_mini_ipip_loaded[[paste0(trait[i])]][[2]] <- output
+}
+
+nlsy_mini_ipip_loaded
+```
+
+## ADD Health Variance-Loaded Models
+
+```{r Add Health Variance Models, eval = F}
+# Model 
+add_variance_model_adj <- svyglm(ever_suspended ~ 
+                            race * sex * open + 
+                            race * sex * extrav + 
+                            race * sex * agree + 
+                            race * sex * neuro + 
+                            race * sex * consc,
+                            family = binomial, 
+                            design = add_adj)
+
+summary(add_variance_model)
+
+add_variance_loaded <- list(NULL)
+trait <- c("extrav", "agree", "neuro", "consc", "open")
+for(i in seq_along(trait)){
+  var_loaded_funct(add_variance_model, paste0(trait[i]))
+  add_variance_loaded[[paste0(trait[i])]][[1]] <- plot
+  add_variance_loaded[[paste0(trait[i])]][[2]] <- output
+}
+
+add_variance_loaded
+```
+
+## Explanatory Power
+
+```{r}
+#install and load pscl package
+library(pscl)
+
+#calculate McFadden's R-squared for model
+
+pR2(nlsy_tipi_variance_model_adj)['McFadden']
+```
+
+
+# Longitudinal Analyses
+
+```{r Longitudinal Models and Output }
+nl <- nlsy_l %>% 
+  select(pid:neuro_mi, race2:weight)%>% 
+  melt(
+  id.vars = c("pid", "sex", "birth_year", "race", "race_full", "race2", "age_tipi", "ever_suspended", "weight", "school_group", "years", "value", "school_age"),
+  variable.name = "measure", 
+  value.name = "score") %>% 
+  split(., .$measure)
+
+# CREADING LISTS OF OUR VARIOUS OUTPUTS
+l_mod <- map(nl, ~glm(value ~ race * sex * score * school_group,
+             family = binomial, data = .x))
+l_sum <- map(l_mod, summary)
+l_plot <- map(l_mod, ~plot_model(.x, type = "pred", 
+                                 terms = c("score", "race", "sex", "school_group")))
+l_trends <- map(l_mod, ~emtrends(.x, pairwise ~ race * sex * school_group, 
+                     var = "score", adjust = "none")
+)
+##### Merging lists
+l_models <- list(NULL)
+for(i in seq_along(l_mod)){
+  l_models[[i]] <-  list(l_mod[[i]], 
+                         l_sum[[i]], 
+                         l_plot[[i]], 
+                         l_trends[[i]])
+}
+# Setting sub-component names
+for(i in seq_along(l_models)){
+  names(l_models[[i]]) = c("Model", "Summary", "Plot", "Emtrend_Output")
+}
+# Setting names
+names(l_models) <- names(nl)
+```
+
+```{r}
+sig_values <- list(NULL)
+for(i in seq_along(l_trends)){
+  sig_values[[i]] = summary(l_trends[[i]]$contrasts) %>% 
+    as_tibble(.) %>% 
+    filter(`p.value` < .05)
+}
+names(sig_values) = names(nl)
+print(sig_values)
+```
+
+# Analysis for presentations
+
+```{r}
+sigval_ordered <- sig_values[order(names(sig_values))]
+sigval_ordered_adj <- sig_values_adj[order(names(sig_values_adj))]
+mods_ordered <- pers_models[order(names(pers_models))]
+plots_ordered <- p_plot[order(names(p_plot))]
+plots_ordered_adj <- p_plot_adj[order(names(p_plot_adj))]
+```
+
+```{r Race X Gender Bar Chart}
+n <- nlsy_adj_rxg[[3]]$data  %>% 
+  tibble()
+n <- n %>% 
+  mutate(
+         race = factor(n$x, 
+                       labels = c("Black", "White", "Latinx", "Other")),
+         dataset = "NLSY")
+a <- add_adj_rxg[[3]]$data  %>% 
+  tibble()
+a <- a %>% 
+  mutate(
+         race = factor(a$x, labels = c("Black", "White", "Latinx", "Other")),
+         dataset = "ADD Health")
+d <- rbind(n, a)
+d$group <- d$group %>% 
+  forcats::fct_relevel("male", "female")
+levels(d$group) <- c("Male", "Female")
+d %>%                  
+  ggplot(aes(x = group, predicted, fill = race)) +
+  geom_col(position = "dodge") +
+  geom_errorbar(aes(x = group, ymin = conf.low, ymax = conf.high),
+                position = position_dodge(width = .9),
+                width = .2,
+                size = .5,
+                color = "gray35") +
+  scale_fill_manual(values = c("red1", "deepskyblue2", "gray 66", "grey 79")) +
+  labs(fill = "Race") +
+  facet_wrap(~dataset) +
+  ylab("Suspension Rate") +
+  xlab("Gender") +
+  
+  theme_minimal() 
+
+```
+
+
+```{r}
+display_funct <- function(i){
+  sigval_ordered[paste0(i)] %>% 
+    print
+  plots_ordered[paste0(i)] %>% 
+    print
+  plots_ordered_adj[paste0(i)] %>% 
+    print
+}
+display_funct("optimism_add")
+```
+
+```{r}
+p_only <- svyglm(ever_suspended ~ open + extrav + agree + neuro + consc + anger + anxiety + optimism,
+           family = binomial, 
+           design = add_adj)
+p_only <- svyglm(ever_suspended ~ open + extrav + agree + neuro + consc,
+           family = binomial, 
+           design = nlsy_adj)
+
+pR2(p_only)['McFadden']
+
+```
+
+
