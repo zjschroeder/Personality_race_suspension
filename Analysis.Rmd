@@ -13,7 +13,7 @@ knitr::opts_chunk$set(warning = FALSE)
 
 # Data Import
 
-### Libraries
+## Libraries
 
 ```{r Packages, results='hide', message=FALSE}
 library(tidyverse)
@@ -33,21 +33,30 @@ library(jtools)
 library(knitr)
 library(kableExtra)
 library(survey)
-
+library(grid)
+library(survival)
+source("cleaning_functions.R")
 here::here()
 ```
 
-```{r Plotting Themes}
+```{r Preset Plotting Themes Plotting Themes}
 set_theme(base = theme_minimal())
 ```
 
-
-### Load Data
+## Load Data
 
 ```{r Load Data}
-load("data.rdata")
-load("personality_measures.rData")
+load("data/data.rdata")
+load("data/personality_measures.rdata")
+
 ```
+
+```{r Adding Dataset with positive variables}
+IDs <- nlsy$pid
+nlsy_new <- data_NLSY_pos %>% 
+  filter(CPUBID %in% IDs)
+```
+
 
 ### Column Names
 
@@ -163,7 +172,7 @@ names(d) <- paste0(names_list, names_data)
 
 ### lists for Sampling Weights Adjusted
 
-```{r}
+```{r Weighted data}
 require(survey)
 nlsy_adj <- svydesign(id     = ~pid,
                      weights = ~weight,
@@ -179,9 +188,7 @@ add_adj <- svydesign(id      = ~pid,
                      data    = add)
 data_adj <- list(nlsy_adj, add_adj)
 names(data_adj) <- c("nlsy_adj", "add_adj")
-```
 
-```{r manipulating weighted data into lists}
 # CREATING MAP-ABLE LIST OF DATA
 a_adj <- map(a, ~svydesign(id     = ~pid,
                            weights = ~weight,
@@ -245,7 +252,7 @@ pdem_plot(add)
 
 ## Proportion Suspended (Unweighted)
 
-```{r}
+```{r UW Proportion Suspended}
 ################ FUNCTION
 susp_prop <- function(df){
   proportion <- df %>% 
@@ -296,7 +303,7 @@ plot_prop(add_prop)
 
 ## (W) Proportion Suspended 
 
-```{r}
+```{r W Proportion Suspended}
 require(survey)
 ########### Creating Data Table
 adj_samples <- map(data_adj, ~svytotal(
@@ -373,12 +380,11 @@ adj_plot_f <- function(x)
 map(adj_prop, adj_plot_f)
 ```
 
-
 # Inferential Statistics
 
 ## Race x Gender inxn Effects Of Being Suspended 
 
-```{r Race x Gender Interaction Function, results='asis'}
+```{r UW Race x Gender, results='asis'}
 race_by_gender_interaction <- function(df){
   name <- deparse(substitute(df))
   rsm <- glm(ever_suspended ~ race * sex,
@@ -402,7 +408,7 @@ race_by_gender_interaction(add)
 
 ## (W) Race x Gender inxn Effects Of Being Suspended 
 
-```{r}
+```{r W Race x Gender, results='asis'}
 race_by_gender_interaction_adj <- function(df){
   name <- deparse(substitute(df))
   rsm <- svyglm(ever_suspended ~ race * sex,
@@ -427,7 +433,7 @@ race_by_gender_interaction_adj(add_adj)
 
 ## Output for race x gender x suspension models
 
-```{r}
+```{r Print Gender x Race x Suspension models}
 print(nlsy_rxg)
 print(nlsy_adj_rxg)
 print(add_rxg)
@@ -649,7 +655,6 @@ library(pscl)
 pR2(nlsy_tipi_variance_model_adj)['McFadden']
 ```
 
-
 # Longitudinal Analyses
 
 ```{r Longitudinal Models and Output }
@@ -742,7 +747,6 @@ d %>%
   theme_minimal() 
 
 ```
-
 
 ```{r}
 display_funct <- function(i){
