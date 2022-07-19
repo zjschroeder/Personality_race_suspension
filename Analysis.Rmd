@@ -43,19 +43,40 @@ here::here()
 set_theme(base = theme_minimal())
 ```
 
+
 ## Load Data
 
 ```{r Load Data}
+# New Positive-variable data
+load("data_new_clean.rdata")
+load("data_NLSY_pos.rdata")
+add_2 <- add
+nlsy_2 <- data_NLSY_pos
+
+# Original Data
 load("data/data.rdata")
-load("data/personality_measures.rdata")
+#load("data/personality_measures.rdata")
+```
+
+## Comparing ADD Health Data
+
+```{r Comparing ADD Health data}
+omit <- subset(add_2, !(pid %in% add$pid)) %>% select(pid) %>% unlist()
+omit <- as.numeric(omit)
+add_compare <- subset(add_2, !(pid %in% omit))
+
+
+
+add_compare <- tibble(
+  sex1 <- add$sex,
+  sex2 <- add_2$sex,
+  by1 <- add$birth_year,
+  by2 <- add$birth_year
+)
 
 ```
 
-```{r Adding Dataset with positive variables}
-IDs <- nlsy$pid
-nlsy_new <- data_NLSY_pos %>% 
-  filter(CPUBID %in% IDs)
-```
+
 
 
 ### Column Names
